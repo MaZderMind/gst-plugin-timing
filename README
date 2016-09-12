@@ -1,0 +1,10 @@
+gst-plugin-timing
+-----------------
+
+Tools for measurements in real-time pipelines.
+
+ - throughput: measure wallclock-throughput of a point in the pipeline in frames,
+   samples, buffers, bytes or bits per second.
+
+ - shift: shift timestamps of buffers by a defined amount to see, if a muxer
+   or another combining element can handle that and put things back together correctly
