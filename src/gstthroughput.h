@@ -55,22 +55,14 @@ struct _GstThroughput {
 
   /*< private >*/
   GstClockID     clock_id;
-  gint 	 	 error_after;
-  gfloat 	 drop_probability;
-  gint		 datarate;
-  guint 	 sleep_time;
-  gboolean 	 silent;
-  gboolean 	 dump;
-  gboolean 	 sync;
-  gboolean 	 check_imperfect_timestamp;
-  gboolean 	 check_imperfect_offset;
-  gboolean	 single_segment;
+  gboolean       sync;
+  gboolean       stderr;
   GstBufferFlags drop_buffer_flags;
   GstClockTime   prev_timestamp;
   GstClockTime   prev_duration;
   guint64        prev_offset;
   guint64        prev_offset_end;
-  gchar 	*last_message;
+  gchar          *last_message;
   guint64        offset;
   gboolean       signal_handoffs;
   GstClockTime   upstream_latency;
@@ -80,9 +72,6 @@ struct _GstThroughput {
 
 struct _GstThroughputClass {
   GstBaseTransformClass parent_class;
-
-  /* signals */
-  void (*handoff) (GstElement *element, GstBuffer *buf);
 };
 
 G_GNUC_INTERNAL GType gst_throughput_get_type (void);

@@ -52,41 +52,19 @@ GST_DEBUG_CATEGORY_STATIC (gst_throughput_debug);
 /* Throughput signals and args */
 enum
 {
-  SIGNAL_HANDOFF,
   /* FILL ME */
   LAST_SIGNAL
 };
 
-#define DEFAULT_SLEEP_TIME              0
-#define DEFAULT_DUPLICATE               1
-#define DEFAULT_ERROR_AFTER             -1
-#define DEFAULT_DROP_PROBABILITY        0.0
-#define DEFAULT_DROP_BUFFER_FLAGS       0
-#define DEFAULT_DATARATE                0
-#define DEFAULT_SILENT                  TRUE
-#define DEFAULT_SINGLE_SEGMENT          FALSE
-#define DEFAULT_DUMP                    FALSE
 #define DEFAULT_SYNC                    FALSE
-#define DEFAULT_CHECK_IMPERFECT_TIMESTAMP FALSE
-#define DEFAULT_CHECK_IMPERFECT_OFFSET    FALSE
-#define DEFAULT_SIGNAL_HANDOFFS           TRUE
+#define DEFAULT_STDERR                  FALSE
 
 enum
 {
   PROP_0,
-  PROP_SLEEP_TIME,
-  PROP_ERROR_AFTER,
-  PROP_DROP_PROBABILITY,
-  PROP_DROP_BUFFER_FLAGS,
-  PROP_DATARATE,
-  PROP_SILENT,
-  PROP_SINGLE_SEGMENT,
   PROP_LAST_MESSAGE,
-  PROP_DUMP,
   PROP_SYNC,
-  PROP_CHECK_IMPERFECT_TIMESTAMP,
-  PROP_CHECK_IMPERFECT_OFFSET,
-  PROP_SIGNAL_HANDOFFS
+  PROP_STDERR
 };
 
 
@@ -114,8 +92,6 @@ static gboolean gst_throughput_accept_caps (GstBaseTransform * base,
     GstPadDirection direction, GstCaps * caps);
 static gboolean gst_throughput_query (GstBaseTransform * base,
     GstPadDirection direction, GstQuery * query);
-
-static guint gst_throughput_signals[LAST_SIGNAL] = { 0 };
 
 static GParamSpec *pspec_last_message = NULL;
 
@@ -146,93 +122,19 @@ gst_throughput_class_init (GstThroughputClass * klass)
   gobject_class->set_property = gst_throughput_set_property;
   gobject_class->get_property = gst_throughput_get_property;
 
-  g_object_class_install_property (gobject_class, PROP_SLEEP_TIME,
-      g_param_spec_uint ("sleep-time", "Sleep time",
-          "Microseconds to sleep between processing", 0, G_MAXUINT,
-          DEFAULT_SLEEP_TIME, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class, PROP_ERROR_AFTER,
-      g_param_spec_int ("error-after", "Error After", "Error after N buffers",
-          G_MININT, G_MAXINT, DEFAULT_ERROR_AFTER,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class, PROP_DROP_PROBABILITY,
-      g_param_spec_float ("drop-probability", "Drop Probability",
-          "The Probability a buffer is dropped", 0.0, 1.0,
-          DEFAULT_DROP_PROBABILITY,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-
-  /**
-   * GstThroughput:drop-buffer-flags:
-   *
-   * Drop buffers with the given flags.
-   *
-   * Since: 1.8
-   **/
-  g_object_class_install_property (gobject_class, PROP_DROP_BUFFER_FLAGS,
-      g_param_spec_flags ("drop-buffer-flags", "Check flags to drop buffers",
-          "Drop buffers with the given flags",
-          GST_TYPE_BUFFER_FLAGS, DEFAULT_DROP_BUFFER_FLAGS,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class, PROP_DATARATE,
-      g_param_spec_int ("datarate", "Datarate",
-          "(Re)timestamps buffers with number of bytes per second (0 = inactive)",
-          0, G_MAXINT, DEFAULT_DATARATE,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class, PROP_SILENT,
-      g_param_spec_boolean ("silent", "silent", "silent", DEFAULT_SILENT,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class, PROP_SINGLE_SEGMENT,
-      g_param_spec_boolean ("single-segment", "Single Segment",
-          "Timestamp buffers and eat segments so as to appear as one segment",
-          DEFAULT_SINGLE_SEGMENT, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   pspec_last_message = g_param_spec_string ("last-message", "last-message",
       "last-message", NULL, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
   g_object_class_install_property (gobject_class, PROP_LAST_MESSAGE,
       pspec_last_message);
-  g_object_class_install_property (gobject_class, PROP_DUMP,
-      g_param_spec_boolean ("dump", "Dump", "Dump buffer contents to stdout",
-          DEFAULT_DUMP, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject_class, PROP_SYNC,
       g_param_spec_boolean ("sync", "Synchronize",
           "Synchronize to pipeline clock", DEFAULT_SYNC,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class,
-      PROP_CHECK_IMPERFECT_TIMESTAMP,
-      g_param_spec_boolean ("check-imperfect-timestamp",
-          "Check for discontiguous timestamps",
-          "Send element messages if timestamps and durations do not match up",
-          DEFAULT_CHECK_IMPERFECT_TIMESTAMP,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class, PROP_CHECK_IMPERFECT_OFFSET,
-      g_param_spec_boolean ("check-imperfect-offset",
-          "Check for discontiguous offset",
-          "Send element messages if offset and offset_end do not match up",
-          DEFAULT_CHECK_IMPERFECT_OFFSET,
+  g_object_class_install_property (gobject_class, PROP_STDERR,
+      g_param_spec_boolean ("stderr", "stderr",
+          "Also print measurements to stderr", DEFAULT_STDERR,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
-  /**
-   * GstThroughput:signal-handoffs
-   *
-   * If set to #TRUE, the throughput will emit a handoff signal when handling a buffer.
-   * When set to #FALSE, no signal will be emitted, which might improve performance.
-   */
-  g_object_class_install_property (gobject_class, PROP_SIGNAL_HANDOFFS,
-      g_param_spec_boolean ("signal-handoffs",
-          "Signal handoffs", "Send a signal before pushing the buffer",
-          DEFAULT_SIGNAL_HANDOFFS, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-
-  /**
-   * GstThroughput::handoff:
-   * @throughput: the throughput instance
-   * @buffer: the buffer that just has been received
-   * @pad: the pad that received it
-   *
-   * This signal gets emitted before passing the buffer downstream.
-   */
-  gst_throughput_signals[SIGNAL_HANDOFF] =
-      g_signal_new ("handoff", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_LAST,
-      G_STRUCT_OFFSET (GstThroughputClass, handoff), NULL, NULL,
-      g_cclosure_marshal_generic, G_TYPE_NONE, 1,
-      GST_TYPE_BUFFER | G_SIGNAL_TYPE_STATIC_SCOPE);
 
   gobject_class->finalize = gst_throughput_finalize;
 
@@ -259,19 +161,9 @@ gst_throughput_class_init (GstThroughputClass * klass)
 static void
 gst_throughput_init (GstThroughput * throughput)
 {
-  throughput->sleep_time = DEFAULT_SLEEP_TIME;
-  throughput->error_after = DEFAULT_ERROR_AFTER;
-  throughput->drop_probability = DEFAULT_DROP_PROBABILITY;
-  throughput->drop_buffer_flags = DEFAULT_DROP_BUFFER_FLAGS;
-  throughput->datarate = DEFAULT_DATARATE;
-  throughput->silent = DEFAULT_SILENT;
-  throughput->single_segment = DEFAULT_SINGLE_SEGMENT;
   throughput->sync = DEFAULT_SYNC;
-  throughput->check_imperfect_timestamp = DEFAULT_CHECK_IMPERFECT_TIMESTAMP;
-  throughput->check_imperfect_offset = DEFAULT_CHECK_IMPERFECT_OFFSET;
-  throughput->dump = DEFAULT_DUMP;
+  throughput->stderr = DEFAULT_STDERR;
   throughput->last_message = NULL;
-  throughput->signal_handoffs = DEFAULT_SIGNAL_HANDOFFS;
   g_cond_init (&throughput->blocked_cond);
 
   gst_base_transform_set_gap_aware (GST_BASE_TRANSFORM_CAST (throughput), TRUE);
@@ -281,6 +173,8 @@ static void
 gst_throughput_notify_last_message (GstThroughput * throughput)
 {
   g_object_notify_by_pspec ((GObject *) throughput, pspec_last_message);
+  if(throughput->stderr)
+    g_message("%s", throughput->last_message);
 }
 
 static GstFlowReturn
@@ -333,7 +227,7 @@ gst_throughput_sink_event (GstBaseTransform * trans, GstEvent * event)
 
   throughput = GST_THROUGHPUT (trans);
 
-  if (!throughput->silent) {
+  if (FALSE) {
     const GstStructure *s;
     const gchar *tstr;
     gchar *sstr;
@@ -357,26 +251,6 @@ gst_throughput_sink_event (GstBaseTransform * trans, GstEvent * event)
     gst_throughput_notify_last_message (throughput);
   }
 
-  if (throughput->single_segment && (GST_EVENT_TYPE (event) == GST_EVENT_SEGMENT)) {
-    if (!trans->have_segment) {
-      GstEvent *news;
-      GstSegment segment;
-
-      gst_event_copy_segment (event, &segment);
-      gst_event_copy_segment (event, &trans->segment);
-      trans->have_segment = TRUE;
-
-      /* This is the first segment, send out a (0, -1) segment */
-      gst_segment_init (&segment, segment.format);
-      news = gst_event_new_segment (&segment);
-
-      gst_pad_event_default (trans->sinkpad, GST_OBJECT_CAST (trans), news);
-    } else {
-      /* need to track segment for proper running time */
-      gst_event_copy_segment (event, &trans->segment);
-    }
-  }
-
   if (GST_EVENT_TYPE (event) == GST_EVENT_GAP &&
       trans->have_segment && trans->segment.format == GST_FORMAT_TIME) {
     GstClockTime start, dur;
@@ -387,12 +261,6 @@ gst_throughput_sink_event (GstBaseTransform * trans, GstEvent * event)
           GST_FORMAT_TIME, start);
 
       gst_throughput_do_sync (throughput, start);
-
-      /* also transform GAP timestamp similar to buffer timestamps */
-      if (throughput->single_segment) {
-        gst_event_unref (event);
-        event = gst_event_new_gap (start, dur);
-      }
     }
   }
 
@@ -403,121 +271,7 @@ gst_throughput_sink_event (GstBaseTransform * trans, GstEvent * event)
     throughput->prev_offset = throughput->prev_offset_end = GST_BUFFER_OFFSET_NONE;
   }
 
-  if (throughput->single_segment && GST_EVENT_TYPE (event) == GST_EVENT_SEGMENT) {
-    /* eat up segments */
-    gst_event_unref (event);
-    ret = TRUE;
-  } else {
-    if (GST_EVENT_TYPE (event) == GST_EVENT_FLUSH_START) {
-      GST_OBJECT_LOCK (throughput);
-      if (throughput->clock_id) {
-        GST_DEBUG_OBJECT (throughput, "unlock clock wait");
-        gst_clock_id_unschedule (throughput->clock_id);
-      }
-      GST_OBJECT_UNLOCK (throughput);
-    }
-
-    ret = GST_BASE_TRANSFORM_CLASS (parent_class)->sink_event (trans, event);
-  }
-
   return ret;
-}
-
-static void
-gst_throughput_check_imperfect_timestamp (GstThroughput * throughput, GstBuffer * buf)
-{
-  GstClockTime timestamp = GST_BUFFER_TIMESTAMP (buf);
-
-  /* invalid timestamp drops us out of check.  FIXME: maybe warn ? */
-  if (timestamp != GST_CLOCK_TIME_NONE) {
-    /* check if we had a previous buffer to compare to */
-    if (throughput->prev_timestamp != GST_CLOCK_TIME_NONE &&
-        throughput->prev_duration != GST_CLOCK_TIME_NONE) {
-      GstClockTime t_expected;
-      GstClockTimeDiff dt;
-
-      t_expected = throughput->prev_timestamp + throughput->prev_duration;
-      dt = GST_CLOCK_DIFF (t_expected, timestamp);
-      if (dt != 0) {
-        /*
-         * "imperfect-timestamp" bus message:
-         * @throughput:        the throughput instance
-         * @delta:           the GST_CLOCK_DIFF to the prev timestamp
-         * @prev-timestamp:  the previous buffer timestamp
-         * @prev-duration:   the previous buffer duration
-         * @prev-offset:     the previous buffer offset
-         * @prev-offset-end: the previous buffer offset end
-         * @cur-timestamp:   the current buffer timestamp
-         * @cur-duration:    the current buffer duration
-         * @cur-offset:      the current buffer offset
-         * @cur-offset-end:  the current buffer offset end
-         *
-         * This bus message gets emitted if the check-imperfect-timestamp
-         * property is set and there is a gap in time between the
-         * last buffer and the newly received buffer.
-         */
-        gst_element_post_message (GST_ELEMENT (throughput),
-            gst_message_new_element (GST_OBJECT (throughput),
-                gst_structure_new ("imperfect-timestamp",
-                    "delta", G_TYPE_INT64, dt,
-                    "prev-timestamp", G_TYPE_UINT64,
-                    throughput->prev_timestamp, "prev-duration", G_TYPE_UINT64,
-                    throughput->prev_duration, "prev-offset", G_TYPE_UINT64,
-                    throughput->prev_offset, "prev-offset-end", G_TYPE_UINT64,
-                    throughput->prev_offset_end, "cur-timestamp", G_TYPE_UINT64,
-                    timestamp, "cur-duration", G_TYPE_UINT64,
-                    GST_BUFFER_DURATION (buf), "cur-offset", G_TYPE_UINT64,
-                    GST_BUFFER_OFFSET (buf), "cur-offset-end", G_TYPE_UINT64,
-                    GST_BUFFER_OFFSET_END (buf), NULL)));
-      }
-    } else {
-      GST_DEBUG_OBJECT (throughput, "can't check data-contiguity, no "
-          "offset_end was set on previous buffer");
-    }
-  }
-}
-
-static void
-gst_throughput_check_imperfect_offset (GstThroughput * throughput, GstBuffer * buf)
-{
-  guint64 offset;
-
-  offset = GST_BUFFER_OFFSET (buf);
-
-  if (throughput->prev_offset_end != offset &&
-      throughput->prev_offset_end != GST_BUFFER_OFFSET_NONE &&
-      offset != GST_BUFFER_OFFSET_NONE) {
-    /*
-     * "imperfect-offset" bus message:
-     * @throughput:        the throughput instance
-     * @prev-timestamp:  the previous buffer timestamp
-     * @prev-duration:   the previous buffer duration
-     * @prev-offset:     the previous buffer offset
-     * @prev-offset-end: the previous buffer offset end
-     * @cur-timestamp:   the current buffer timestamp
-     * @cur-duration:    the current buffer duration
-     * @cur-offset:      the current buffer offset
-     * @cur-offset-end:  the current buffer offset end
-     *
-     * This bus message gets emitted if the check-imperfect-offset
-     * property is set and there is a gap in offsets between the
-     * last buffer and the newly received buffer.
-     */
-    gst_element_post_message (GST_ELEMENT (throughput),
-        gst_message_new_element (GST_OBJECT (throughput),
-            gst_structure_new ("imperfect-offset", "prev-timestamp",
-                G_TYPE_UINT64, throughput->prev_timestamp, "prev-duration",
-                G_TYPE_UINT64, throughput->prev_duration, "prev-offset",
-                G_TYPE_UINT64, throughput->prev_offset, "prev-offset-end",
-                G_TYPE_UINT64, throughput->prev_offset_end, "cur-timestamp",
-                G_TYPE_UINT64, GST_BUFFER_TIMESTAMP (buf), "cur-duration",
-                G_TYPE_UINT64, GST_BUFFER_DURATION (buf), "cur-offset",
-                G_TYPE_UINT64, GST_BUFFER_OFFSET (buf), "cur-offset-end",
-                G_TYPE_UINT64, GST_BUFFER_OFFSET_END (buf), NULL)));
-  } else {
-    GST_DEBUG_OBJECT (throughput, "can't check offset contiguity, no offset "
-        "and/or offset_end were set on previous buffer");
-  }
 }
 
 static const gchar *
@@ -562,15 +316,10 @@ gst_throughput_transform_ip (GstBaseTransform * trans, GstBuffer * buf)
   GstThroughput *throughput = GST_THROUGHPUT (trans);
   GstClockTime rundts = GST_CLOCK_TIME_NONE;
   GstClockTime runpts = GST_CLOCK_TIME_NONE;
-  GstClockTime ts, duration, runtimestamp;
+  GstClockTime runtimestamp;
   gsize size;
 
   size = gst_buffer_get_size (buf);
-
-  if (throughput->check_imperfect_timestamp)
-    gst_throughput_check_imperfect_timestamp (throughput, buf);
-  if (throughput->check_imperfect_offset)
-    gst_throughput_check_imperfect_offset (throughput, buf);
 
   /* update prev values */
   throughput->prev_timestamp = GST_BUFFER_TIMESTAMP (buf);
@@ -578,43 +327,7 @@ gst_throughput_transform_ip (GstBaseTransform * trans, GstBuffer * buf)
   throughput->prev_offset_end = GST_BUFFER_OFFSET_END (buf);
   throughput->prev_offset = GST_BUFFER_OFFSET (buf);
 
-  if (throughput->error_after >= 0) {
-    throughput->error_after--;
-    if (throughput->error_after == 0)
-      goto error_after;
-  }
-
-  if (throughput->drop_probability > 0.0) {
-    if ((gfloat) (1.0 * rand () / (RAND_MAX)) < throughput->drop_probability)
-      goto dropped;
-  }
-
-  if (GST_BUFFER_FLAG_IS_SET (buf, throughput->drop_buffer_flags))
-    goto dropped;
-
-  if (throughput->dump) {
-    GstMapInfo info;
-
-    if (gst_buffer_map (buf, &info, GST_MAP_READ)) {
-      gst_util_dump_mem (info.data, info.size);
-      gst_buffer_unmap (buf, &info);
-    }
-  }
-
-  if (!throughput->silent) {
-    gst_throughput_update_last_message_for_buffer (throughput, "chain", buf, size);
-  }
-
-  if (throughput->datarate > 0) {
-    GstClockTime time = gst_util_uint64_scale_int (throughput->offset,
-        GST_SECOND, throughput->datarate);
-
-    GST_BUFFER_PTS (buf) = GST_BUFFER_DTS (buf) = time;
-    GST_BUFFER_DURATION (buf) = size * GST_SECOND / throughput->datarate;
-  }
-
-  if (throughput->signal_handoffs)
-    g_signal_emit (throughput, gst_throughput_signals[SIGNAL_HANDOFF], 0, buf);
+  gst_throughput_update_last_message_for_buffer (throughput, "chain", buf, size);
 
   if (trans->segment.format == GST_FORMAT_TIME) {
     rundts = gst_segment_to_running_time (&trans->segment,
@@ -633,43 +346,7 @@ gst_throughput_transform_ip (GstBaseTransform * trans, GstBuffer * buf)
 
   throughput->offset += size;
 
-  if (throughput->sleep_time && ret == GST_FLOW_OK)
-    g_usleep (throughput->sleep_time);
-
-  if (throughput->single_segment && (trans->segment.format == GST_FORMAT_TIME)
-      && (ret == GST_FLOW_OK)) {
-    GST_BUFFER_DTS (buf) = rundts;
-    GST_BUFFER_PTS (buf) = runpts;
-    GST_BUFFER_OFFSET (buf) = GST_CLOCK_TIME_NONE;
-    GST_BUFFER_OFFSET_END (buf) = GST_CLOCK_TIME_NONE;
-  }
-
   return ret;
-
-  /* ERRORS */
-error_after:
-  {
-    GST_ELEMENT_ERROR (throughput, CORE, FAILED,
-        ("Failed after iterations as requested."), (NULL));
-    return GST_FLOW_ERROR;
-  }
-dropped:
-  {
-    if (!throughput->silent) {
-      gst_throughput_update_last_message_for_buffer (throughput, "dropping", buf,
-          size);
-    }
-
-    ts = GST_BUFFER_TIMESTAMP (buf);
-    if (GST_CLOCK_TIME_IS_VALID (ts)) {
-      duration = GST_BUFFER_DURATION (buf);
-      gst_pad_push_event (GST_BASE_TRANSFORM_SRC_PAD (throughput),
-          gst_event_new_gap (ts, duration));
-    }
-
-    /* return DROPPED to basetransform. */
-    return GST_BASE_TRANSFORM_FLOW_DROPPED;
-  }
 }
 
 static void
@@ -681,50 +358,17 @@ gst_throughput_set_property (GObject * object, guint prop_id,
   throughput = GST_THROUGHPUT (object);
 
   switch (prop_id) {
-    case PROP_SLEEP_TIME:
-      throughput->sleep_time = g_value_get_uint (value);
-      break;
-    case PROP_SILENT:
-      throughput->silent = g_value_get_boolean (value);
-      break;
-    case PROP_SINGLE_SEGMENT:
-      throughput->single_segment = g_value_get_boolean (value);
-      break;
-    case PROP_DUMP:
-      throughput->dump = g_value_get_boolean (value);
-      break;
-    case PROP_ERROR_AFTER:
-      throughput->error_after = g_value_get_int (value);
-      break;
-    case PROP_DROP_PROBABILITY:
-      throughput->drop_probability = g_value_get_float (value);
-      break;
-    case PROP_DROP_BUFFER_FLAGS:
-      throughput->drop_buffer_flags = g_value_get_flags (value);
-      break;
-    case PROP_DATARATE:
-      throughput->datarate = g_value_get_int (value);
-      break;
     case PROP_SYNC:
       throughput->sync = g_value_get_boolean (value);
       break;
-    case PROP_CHECK_IMPERFECT_TIMESTAMP:
-      throughput->check_imperfect_timestamp = g_value_get_boolean (value);
-      break;
-    case PROP_CHECK_IMPERFECT_OFFSET:
-      throughput->check_imperfect_offset = g_value_get_boolean (value);
-      break;
-    case PROP_SIGNAL_HANDOFFS:
-      throughput->signal_handoffs = g_value_get_boolean (value);
+    case PROP_STDERR:
+      throughput->stderr = g_value_get_boolean (value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
   }
-  if (throughput->datarate > 0 || throughput->single_segment)
-    gst_base_transform_set_passthrough (GST_BASE_TRANSFORM (throughput), FALSE);
-  else
-    gst_base_transform_set_passthrough (GST_BASE_TRANSFORM (throughput), TRUE);
+  gst_base_transform_set_passthrough (GST_BASE_TRANSFORM (throughput), TRUE);
 }
 
 static void
@@ -736,30 +380,6 @@ gst_throughput_get_property (GObject * object, guint prop_id, GValue * value,
   throughput = GST_THROUGHPUT (object);
 
   switch (prop_id) {
-    case PROP_SLEEP_TIME:
-      g_value_set_uint (value, throughput->sleep_time);
-      break;
-    case PROP_ERROR_AFTER:
-      g_value_set_int (value, throughput->error_after);
-      break;
-    case PROP_DROP_PROBABILITY:
-      g_value_set_float (value, throughput->drop_probability);
-      break;
-    case PROP_DROP_BUFFER_FLAGS:
-      g_value_set_flags (value, throughput->drop_buffer_flags);
-      break;
-    case PROP_DATARATE:
-      g_value_set_int (value, throughput->datarate);
-      break;
-    case PROP_SILENT:
-      g_value_set_boolean (value, throughput->silent);
-      break;
-    case PROP_SINGLE_SEGMENT:
-      g_value_set_boolean (value, throughput->single_segment);
-      break;
-    case PROP_DUMP:
-      g_value_set_boolean (value, throughput->dump);
-      break;
     case PROP_LAST_MESSAGE:
       GST_OBJECT_LOCK (throughput);
       g_value_set_string (value, throughput->last_message);
@@ -768,14 +388,8 @@ gst_throughput_get_property (GObject * object, guint prop_id, GValue * value,
     case PROP_SYNC:
       g_value_set_boolean (value, throughput->sync);
       break;
-    case PROP_CHECK_IMPERFECT_TIMESTAMP:
-      g_value_set_boolean (value, throughput->check_imperfect_timestamp);
-      break;
-    case PROP_CHECK_IMPERFECT_OFFSET:
-      g_value_set_boolean (value, throughput->check_imperfect_offset);
-      break;
-    case PROP_SIGNAL_HANDOFFS:
-      g_value_set_boolean (value, throughput->signal_handoffs);
+    case PROP_STDERR:
+      g_value_set_boolean (value, throughput->stderr);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
