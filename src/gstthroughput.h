@@ -38,19 +38,29 @@ G_BEGIN_DECLS
 
 typedef struct _GstThroughput GstThroughput;
 typedef struct _GstThroughputClass GstThroughputClass;
+typedef struct _GstThroughputState GstThroughputState;
 
+
+struct _GstThroughputState {
+  GstClockTime   last_timestamp;
+
+  guint64        count_offsets;
+  guint64        count_buffers;
+  guint64        count_bytes;
+};
 /**
  * GstThroughput:
  *
  * Opaque #GstThroughput data structure
  */
 struct _GstThroughput {
-  GstBaseTransform 	 element;
+  GstBaseTransform   element;
 
   /*< private >*/
   GstClockID     clock_id;
   gboolean       sync;
   gboolean       stderr;
+  guint          interval;
   GstBufferFlags drop_buffer_flags;
   GstClockTime   prev_timestamp;
   GstClockTime   prev_duration;
@@ -62,6 +72,12 @@ struct _GstThroughput {
   GstClockTime   upstream_latency;
   GCond          blocked_cond;
   gboolean       blocked;
+
+  GstCaps        *video_caps;
+  GstCaps        *audio_caps;
+
+  GstThroughputState state;
+  GstThroughputState laststate;
 };
 
 struct _GstThroughputClass {

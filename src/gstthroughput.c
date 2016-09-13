@@ -52,13 +52,15 @@ enum
 
 #define DEFAULT_SYNC                    FALSE
 #define DEFAULT_STDERR                  FALSE
+#define DEFAULT_INTERVAL                1000
 
 enum
 {
   PROP_0,
   PROP_LAST_MESSAGE,
   PROP_SYNC,
-  PROP_STDERR
+  PROP_STDERR,
+  PROP_INTERVAL
 };
 
 
@@ -96,6 +98,8 @@ gst_throughput_finalize (GObject * object)
 
   throughput = GST_THROUGHPUT (object);
 
+  gst_caps_unref(throughput->video_caps);
+  gst_caps_unref(throughput->audio_caps);
   g_free (throughput->last_message);
   g_cond_clear (&throughput->blocked_cond);
 
@@ -128,6 +132,10 @@ gst_throughput_class_init (GstThroughputClass * klass)
       g_param_spec_boolean ("stderr", "stderr",
           "Also print measurements to stderr", DEFAULT_STDERR,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, PROP_INTERVAL,
+      g_param_spec_uint ("interval", "Report-Interval",
+          "Interval in Milliseconds between two measurements", 1, G_MAXUINT, DEFAULT_INTERVAL,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
 
   gobject_class->finalize = gst_throughput_finalize;
@@ -157,7 +165,17 @@ gst_throughput_init (GstThroughput * throughput)
 {
   throughput->sync = DEFAULT_SYNC;
   throughput->stderr = DEFAULT_STDERR;
+  throughput->interval = DEFAULT_INTERVAL;
   throughput->last_message = NULL;
+
+  throughput->video_caps = gst_caps_new_empty_simple("video/x-raw");
+  throughput->audio_caps = gst_caps_new_empty_simple("audio/x-raw");
+
+  throughput->state.last_timestamp = GST_CLOCK_TIME_NONE;
+  throughput->state.count_offsets = 0;
+  throughput->state.count_buffers = 0;
+  throughput->state.count_bytes = 0;
+
   g_cond_init (&throughput->blocked_cond);
 
   gst_base_transform_set_gap_aware (GST_BASE_TRANSFORM_CAST (throughput), TRUE);
@@ -236,7 +254,7 @@ gst_throughput_sink_event (GstBaseTransform * trans, GstEvent * event)
       sstr = g_strdup ("");
 
     throughput->last_message =
-        g_strdup_printf ("event   ******* (%s:%s) E (type: %s (%d), %s) %p",
+        g_strdup_printf ("event (%s:%s) type: %s (%d), %s %p",
         GST_DEBUG_PAD_NAME (trans->sinkpad), tstr, GST_EVENT_TYPE (event),
         sstr, event);
     g_free (sstr);
@@ -280,27 +298,50 @@ print_pretty_time (gchar * ts_str, gsize ts_str_len, GstClockTime ts)
 
 static void
 gst_throughput_update_last_message_for_buffer (GstThroughput * throughput,
-    const gchar * action, GstBuffer * buf, gsize size)
+    GstBuffer * buf, gsize size, guint64 offset_delta)
 {
-  gchar dts_str[64], pts_str[64], dur_str[64];
+  gchar tdelta_str[64];
 
   GST_OBJECT_LOCK (throughput);
 
-  g_free (throughput->last_message);
-  throughput->last_message = g_strdup_printf ("%s   ******* (%s:%s) "
-      "(%" G_GSIZE_FORMAT " bytes, dts: %s, pts: %s, duration: %s, offset: %"
-      G_GINT64_FORMAT ", " "offset_end: % " G_GINT64_FORMAT
-      ", flags: %08x) %p", action,
-      GST_DEBUG_PAD_NAME (GST_BASE_TRANSFORM_CAST (throughput)->sinkpad), size,
-      print_pretty_time (dts_str, sizeof (dts_str), GST_BUFFER_DTS (buf)),
-      print_pretty_time (pts_str, sizeof (pts_str), GST_BUFFER_PTS (buf)),
-      print_pretty_time (dur_str, sizeof (dur_str), GST_BUFFER_DURATION (buf)),
-      GST_BUFFER_OFFSET (buf), GST_BUFFER_OFFSET_END (buf),
-      GST_BUFFER_FLAGS (buf), buf);
+  GstClock *sysclock = gst_system_clock_obtain();
+  GstClockTime timestamp = gst_clock_get_time(sysclock);
+  gst_object_unref(sysclock);
+
+  GstCaps *caps = gst_pad_get_current_caps (GST_BASE_TRANSFORM_SINK_PAD(throughput));
+  gboolean is_video = gst_caps_is_always_compatible(caps, throughput->video_caps);
+  gboolean is_audio = gst_caps_is_always_compatible(caps, throughput->audio_caps);
+  gst_caps_unref(caps);
+
+  throughput->state.count_buffers++;
+  throughput->state.count_bytes += size;
+  if(is_video || is_audio)
+    throughput->state.count_offsets += offset_delta;
+
+
+  if(throughput->state.last_timestamp != GST_CLOCK_TIME_NONE)
+  {
+    // not the first frame
+    GstClockTime tdelta = timestamp - throughput->state.last_timestamp;
+
+    g_free (throughput->last_message);
+    throughput->last_message = g_strdup_printf ("time since last message: %s, seen "
+      "%" G_GUINT64_FORMAT " buffers, "
+      "%" G_GUINT64_FORMAT " bytes and "
+      "%" G_GUINT64_FORMAT " frames(is_video=%u)/samples(is_audio=%u)",
+        print_pretty_time (tdelta_str, sizeof (tdelta_str), tdelta),
+        throughput->state.count_buffers,
+        throughput->state.count_bytes,
+        throughput->state.count_offsets,
+        is_video, is_audio);
+  }
+
+  throughput->state.last_timestamp = timestamp;
 
   GST_OBJECT_UNLOCK (throughput);
 
-  gst_throughput_notify_last_message (throughput);
+  if(G_LIKELY(throughput->last_message != NULL))
+    gst_throughput_notify_last_message (throughput);
 }
 
 static GstFlowReturn
@@ -314,6 +355,7 @@ gst_throughput_transform_ip (GstBaseTransform * trans, GstBuffer * buf)
   gsize size;
 
   size = gst_buffer_get_size (buf);
+  guint64 offset_delta = GST_BUFFER_OFFSET (buf) - throughput->prev_offset;
 
   /* update prev values */
   throughput->prev_timestamp = GST_BUFFER_TIMESTAMP (buf);
@@ -321,7 +363,7 @@ gst_throughput_transform_ip (GstBaseTransform * trans, GstBuffer * buf)
   throughput->prev_offset_end = GST_BUFFER_OFFSET_END (buf);
   throughput->prev_offset = GST_BUFFER_OFFSET (buf);
 
-  gst_throughput_update_last_message_for_buffer (throughput, "chain", buf, size);
+  gst_throughput_update_last_message_for_buffer (throughput, buf, size, offset_delta);
 
   if (trans->segment.format == GST_FORMAT_TIME) {
     rundts = gst_segment_to_running_time (&trans->segment,
@@ -358,6 +400,9 @@ gst_throughput_set_property (GObject * object, guint prop_id,
     case PROP_STDERR:
       throughput->stderr = g_value_get_boolean (value);
       break;
+    case PROP_INTERVAL:
+      throughput->interval = g_value_get_uint (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -384,6 +429,9 @@ gst_throughput_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_STDERR:
       g_value_set_boolean (value, throughput->stderr);
+      break;
+    case PROP_INTERVAL:
+      g_value_set_uint (value, throughput->interval);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
