@@ -287,22 +287,10 @@ gst_throughput_sink_event (GstBaseTransform * trans, GstEvent * event)
   return ret;
 }
 
-static const gchar *
-print_pretty_time (gchar * ts_str, gsize ts_str_len, GstClockTime ts)
-{
-  if (ts == GST_CLOCK_TIME_NONE)
-    return "none";
-
-  g_snprintf (ts_str, ts_str_len, "%" GST_TIME_FORMAT, GST_TIME_ARGS (ts));
-  return ts_str;
-}
-
 static void
 gst_throughput_update_last_message_for_buffer (GstThroughput * throughput,
     GstBuffer * buf, gsize size, guint64 offset_delta)
 {
-  gchar tdelta_str[64];
-
   GST_OBJECT_LOCK (throughput);
 
   GstClock *sysclock = gst_system_clock_obtain();
@@ -310,8 +298,28 @@ gst_throughput_update_last_message_for_buffer (GstThroughput * throughput,
   gst_object_unref(sysclock);
 
   GstCaps *caps = gst_pad_get_current_caps (GST_BASE_TRANSFORM_SINK_PAD(throughput));
+  GstStructure * struc = gst_caps_get_structure(caps, 0);
   gboolean is_video = gst_caps_is_always_compatible(caps, throughput->video_caps);
   gboolean is_audio = gst_caps_is_always_compatible(caps, throughput->audio_caps);
+
+  float offsets_per_second_from_caps = 0.0;
+  if(is_video)
+  {
+    gint num, denom;
+    if(gst_structure_get_fraction(struc, "framerate", &num, &denom))
+    {
+      if(num > 0 && denom > 0)
+        offsets_per_second_from_caps = num / denom;
+    }
+  }
+  else if(is_audio)
+  {
+    int rate;
+    if(gst_structure_get_int(struc, "rate", &rate))
+    {
+      offsets_per_second_from_caps = rate;
+    }
+  }
   gst_caps_unref(caps);
 
   //g_message("update throughput->measurement.timestamp = timestamp");
@@ -337,18 +345,46 @@ gst_throughput_update_last_message_for_buffer (GstThroughput * throughput,
 
     if(tdelta > throughput->interval*1000*1000)
     {
-      //g_message("tdelta > interval -> printing");
-      g_free (throughput->last_message);
+      float f = 1000000000.0/(float)tdelta;
+      float buffers_per_second = f * (throughput->measurement.count_buffers - throughput->last_measurement.count_buffers);
+      float mbytes_per_second =  f * (throughput->measurement.count_bytes - throughput->last_measurement.count_bytes) / 1024 / 1024;
+      float mbits_per_second =   mbytes_per_second * 8;
+      float offsets_per_second = f * (throughput->measurement.count_offsets - throughput->last_measurement.count_offsets);
+
       new_message = TRUE;
-      throughput->last_message = g_strdup_printf ("time since last message: %s, seen "
-        "%" G_GUINT64_FORMAT " buffers, "
-        "%" G_GUINT64_FORMAT " bytes and "
-        "%" G_GUINT64_FORMAT " frames(is_video=%u)/samples(is_audio=%u)",
-          print_pretty_time (tdelta_str, sizeof (tdelta_str), tdelta),
-          throughput->measurement.count_buffers - throughput->last_measurement.count_buffers,
-          throughput->measurement.count_bytes - throughput->last_measurement.count_bytes,
-          throughput->measurement.count_offsets - throughput->last_measurement.count_offsets,
-          is_video, is_audio);
+      g_free (throughput->last_message);
+      if(is_video) {
+         throughput->last_message = g_strdup_printf (
+          "Transfering %.0f Buffers/s (%.0f Frames/s) of a %.0f Frames/s stream (=%.1f%%) at %.2f MBit/s (= %.2f MByte/s)",
+          buffers_per_second,
+          offsets_per_second,
+          offsets_per_second_from_caps,
+          offsets_per_second / offsets_per_second_from_caps * 100,
+          mbits_per_second,
+          mbytes_per_second
+        );
+      }
+      else if(is_audio)
+      {
+         throughput->last_message = g_strdup_printf (
+          "Transfering %.0f Buffers/s (%.0f Sample/s) of a %.0f Sample/s stream (=%.1f%%) at %.2f MBit/s (= %.2f MByte/s)",
+          buffers_per_second,
+          offsets_per_second,
+          offsets_per_second_from_caps,
+          offsets_per_second / offsets_per_second_from_caps * 100,
+          mbits_per_second,
+          mbytes_per_second
+        );
+      }
+      else
+      {
+         throughput->last_message = g_strdup_printf (
+          "Transfering %.0f Buffers/s at %.2f MBit/s (= %.2f MByte/s)",
+          buffers_per_second,
+          mbits_per_second,
+          mbytes_per_second
+        );
+      }
 
       throughput->last_measurement = throughput->measurement;
     }
