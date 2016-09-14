@@ -187,7 +187,7 @@ gst_throughput_notify_last_message (GstThroughput * throughput)
 {
   g_object_notify_by_pspec ((GObject *) throughput, pspec_last_message);
   if(throughput->stderr)
-    g_message("%s", throughput->last_message);
+    g_message("(%s) %s", GST_ELEMENT_NAME(throughput), throughput->last_message);
 }
 
 static GstFlowReturn
