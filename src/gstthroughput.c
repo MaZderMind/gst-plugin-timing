@@ -171,10 +171,11 @@ gst_throughput_init (GstThroughput * throughput)
   throughput->video_caps = gst_caps_new_empty_simple("video/x-raw");
   throughput->audio_caps = gst_caps_new_empty_simple("audio/x-raw");
 
-  throughput->state.last_timestamp = GST_CLOCK_TIME_NONE;
-  throughput->state.count_offsets = 0;
-  throughput->state.count_buffers = 0;
-  throughput->state.count_bytes = 0;
+  throughput->measurement.timestamp = GST_CLOCK_TIME_NONE;
+  throughput->measurement.count_offsets = 0;
+  throughput->measurement.count_buffers = 0;
+  throughput->measurement.count_bytes = 0;
+  throughput->last_measurement = throughput->measurement;
 
   g_cond_init (&throughput->blocked_cond);
 
@@ -313,34 +314,49 @@ gst_throughput_update_last_message_for_buffer (GstThroughput * throughput,
   gboolean is_audio = gst_caps_is_always_compatible(caps, throughput->audio_caps);
   gst_caps_unref(caps);
 
-  throughput->state.count_buffers++;
-  throughput->state.count_bytes += size;
+  //g_message("update throughput->measurement.timestamp = timestamp");
+  throughput->measurement.timestamp = timestamp;
+  throughput->measurement.count_buffers++;
+  throughput->measurement.count_bytes += size;
   if(is_video || is_audio)
-    throughput->state.count_offsets += offset_delta;
+    throughput->measurement.count_offsets += offset_delta;
 
 
-  if(throughput->state.last_timestamp != GST_CLOCK_TIME_NONE)
+  gboolean new_message = FALSE;
+  if(throughput->last_measurement.timestamp == GST_CLOCK_TIME_NONE)
   {
-    // not the first frame
-    GstClockTime tdelta = timestamp - throughput->state.last_timestamp;
-
-    g_free (throughput->last_message);
-    throughput->last_message = g_strdup_printf ("time since last message: %s, seen "
-      "%" G_GUINT64_FORMAT " buffers, "
-      "%" G_GUINT64_FORMAT " bytes and "
-      "%" G_GUINT64_FORMAT " frames(is_video=%u)/samples(is_audio=%u)",
-        print_pretty_time (tdelta_str, sizeof (tdelta_str), tdelta),
-        throughput->state.count_buffers,
-        throughput->state.count_bytes,
-        throughput->state.count_offsets,
-        is_video, is_audio);
+    // first measurement
+    //g_message("initialize throughput->last_measurement.timestamp = timestamp");
+    throughput->last_measurement.timestamp = timestamp;
   }
 
-  throughput->state.last_timestamp = timestamp;
+  else
+  {
+    GstClockTime tdelta = throughput->measurement.timestamp - throughput->last_measurement.timestamp;
+    //g_message("tdelta = throughput->measurement.timestamp - throughput->last_measurement.timestamp = %" G_GUINT64_FORMAT, tdelta);
+
+    if(tdelta > throughput->interval*1000*1000)
+    {
+      //g_message("tdelta > interval -> printing");
+      g_free (throughput->last_message);
+      new_message = TRUE;
+      throughput->last_message = g_strdup_printf ("time since last message: %s, seen "
+        "%" G_GUINT64_FORMAT " buffers, "
+        "%" G_GUINT64_FORMAT " bytes and "
+        "%" G_GUINT64_FORMAT " frames(is_video=%u)/samples(is_audio=%u)",
+          print_pretty_time (tdelta_str, sizeof (tdelta_str), tdelta),
+          throughput->measurement.count_buffers - throughput->last_measurement.count_buffers,
+          throughput->measurement.count_bytes - throughput->last_measurement.count_bytes,
+          throughput->measurement.count_offsets - throughput->last_measurement.count_offsets,
+          is_video, is_audio);
+
+      throughput->last_measurement = throughput->measurement;
+    }
+  }
 
   GST_OBJECT_UNLOCK (throughput);
 
-  if(G_LIKELY(throughput->last_message != NULL))
+  if(G_UNLIKELY(new_message))
     gst_throughput_notify_last_message (throughput);
 }
 

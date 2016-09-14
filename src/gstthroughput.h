@@ -38,11 +38,11 @@ G_BEGIN_DECLS
 
 typedef struct _GstThroughput GstThroughput;
 typedef struct _GstThroughputClass GstThroughputClass;
-typedef struct _GstThroughputState GstThroughputState;
+typedef struct _GstThroughputMeasurement GstThroughputMeasurement;
 
 
-struct _GstThroughputState {
-  GstClockTime   last_timestamp;
+struct _GstThroughputMeasurement {
+  GstClockTime   timestamp;
 
   guint64        count_offsets;
   guint64        count_buffers;
@@ -76,8 +76,8 @@ struct _GstThroughput {
   GstCaps        *video_caps;
   GstCaps        *audio_caps;
 
-  GstThroughputState state;
-  GstThroughputState laststate;
+  GstThroughputMeasurement measurement;
+  GstThroughputMeasurement last_measurement;
 };
 
 struct _GstThroughputClass {
